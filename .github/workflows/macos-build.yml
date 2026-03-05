@@ -73,40 +73,18 @@ jobs:
           --hidden-import "Utils.ableton_detector" \
           launch_profesor_ableton.py
 
-    - name: Create macOS app bundle
+    - name: Verify app bundle
       run: |
-        # Create proper .app structure
-        mkdir -p "dist/ProfesorAbelton.app/Contents/MacOS"
-        mkdir -p "dist/ProfesorAbelton.app/Contents/Resources"
-
-        # Copy executable
-        cp "dist/ProfesorAbelton" "dist/ProfesorAbelton.app/Contents/MacOS/"
-
-        # Create Info.plist
-        cat > "dist/ProfesorAbelton.app/Contents/Info.plist" << EOF
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>CFBundleExecutable</key>
-            <string>ProfesorAbelton</string>
-            <key>CFBundleIdentifier</key>
-            <string>com.profesorabelton.app</string>
-            <key>CFBundleName</key>
-            <string>Profesor Abelton</string>
-            <key>CFBundleVersion</key>
-            <string>2.0.0</string>
-            <key>CFBundleShortVersionString</key>
-            <string>2.0.0</string>
-            <key>LSMinimumSystemVersion</key>
-            <string>10.13</string>
-            <key>CFBundleIconFile</key>
-            <string>AppIcon</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-        </dict>
-        </plist>
-        EOF
+        # PyInstaller --windowed već kreira .app bundle na macOS-u
+        # Provjerimo da li postoji
+        if [ -d "dist/ProfesorAbelton.app" ]; then
+            echo "✅ App bundle postoji: dist/ProfesorAbelton.app"
+            ls -la "dist/ProfesorAbelton.app/Contents/MacOS/"
+        else
+            echo "❌ App bundle ne postoji, provjerimo šta je u dist folderu:"
+            ls -la dist/
+            exit 1
+        fi
 
     - name: Create ZIP for distribution
       run: |
