@@ -179,7 +179,12 @@ def candidate_user_remote_scripts_dirs() -> List[Path]:
                 candidates.append(live_dir / "Preferences" / "User Remote Scripts")
 
     elif system == "Darwin":
-        # Best-effort: preferences folder
+        # macOS: Check specific Ableton versions (10, 11, 12)
+        ableton_base = Path.home() / "Library" / "Preferences" / "Ableton"
+        for version in ["12", "11", "10"]:  # Check latest versions first
+            candidates.append(ableton_base / f"Live {version}" / "Preferences" / "User Remote Scripts")
+
+        # Fallback: generic preferences folder (for older/other versions)
         candidates.append(Path.home() / "Library" / "Preferences" / "Ableton")
         # And user library convention used by older scripts
         candidates.append(Path.home() / "Music" / "Ableton" / "User Library" / "Remote Scripts")
