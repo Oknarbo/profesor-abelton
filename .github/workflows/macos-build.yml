@@ -58,6 +58,7 @@ jobs:
       run: |
         pyinstaller --noconfirm --clean --windowed \
           --name "ProfesorAbelton" \
+        --debug all \
           --add-data "Config:Config" \
           --add-data "RemoteScript:RemoteScript" \
           --add-data "Docs:Docs" \
