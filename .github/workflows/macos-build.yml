@@ -73,16 +73,15 @@ jobs:
           --hidden-import "Utils.ableton_detector" \
           launch_profesor_ableton.py
 
-    - name: Verify app bundle
+    - name: Code sign app bundle
       run: |
-        # PyInstaller --windowed već kreira .app bundle na macOS-u
-        # Provjerimo da li postoji
+        # Ad-hoc code signing to bypass Gatekeeper
         if [ -d "dist/ProfesorAbelton.app" ]; then
-            echo "✅ App bundle postoji: dist/ProfesorAbelton.app"
-            ls -la "dist/ProfesorAbelton.app/Contents/MacOS/"
+            echo "🔐 Code signing app bundle..."
+            codesign --force --deep --sign - "dist/ProfesorAbelton.app"
+            echo "✅ App bundle code signed"
         else
-            echo "❌ App bundle ne postoji, provjerimo šta je u dist folderu:"
-            ls -la dist/
+            echo "❌ App bundle not found"
             exit 1
         fi
 
