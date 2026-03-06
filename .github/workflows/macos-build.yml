@@ -78,8 +78,16 @@ jobs:
         # Ad-hoc code signing to bypass Gatekeeper
         if [ -d "dist/ProfesorAbelton.app" ]; then
             echo "🔐 Code signing app bundle..."
+            # Remove existing signature first
+            codesign --remove-signature "dist/ProfesorAbelton.app" 2>/dev/null || true
+            # Ad-hoc signing
             codesign --force --deep --sign - "dist/ProfesorAbelton.app"
-            echo "✅ App bundle code signed"
+            # Verify signing
+            if codesign -v "dist/ProfesorAbelton.app"; then
+                echo "✅ App bundle successfully code signed"
+            else
+                echo "⚠️ Code signing completed but verification failed"
+            fi
         else
             echo "❌ App bundle not found"
             exit 1
