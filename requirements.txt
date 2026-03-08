@@ -8,11 +8,11 @@ python-dotenv>=1.0.0
 # Security / encrypted local key storage
 cryptography>=42.0.0
 
-# Voice recognition
-SpeechRecognition>=3.10.0
-pyaudio>=0.2.14
-gTTS>=2.4.0
-pygame>=2.5.0
+# Voice recognition removed for v2.0.0 stability
+# SpeechRecognition>=3.10.0
+# pyaudio>=0.2.14
+# gTTS>=2.4.0
+# pygame>=2.5.0
 
 # GUI (included in Python)
 # tkinter (comes with Python)
