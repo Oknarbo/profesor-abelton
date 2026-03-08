@@ -69,38 +69,38 @@ jobs:
           --hidden-import "Utils.ableton_detector" \
           launch_profesor_ableton.py
 
-        # Build with spec file
-        pyinstaller --noconfirm --clean ProfesorAbelton.spec
+        # Build with spec file but override to create single file
+        pyinstaller --noconfirm --clean --onefile ProfesorAbelton.spec
 
-    - name: Code sign app bundle
+    - name: Code sign executable
       run: |
         # Ad-hoc code signing to bypass Gatekeeper
-        if [ -d "dist/ProfesorAbelton.app" ]; then
-            echo "🔐 Code signing app bundle..."
+        if [ -f "dist/ProfesorAbelton" ]; then
+            echo "🔐 Code signing executable..."
             # Remove existing signature first
-            codesign --remove-signature "dist/ProfesorAbelton.app" 2>/dev/null || true
+            codesign --remove-signature "dist/ProfesorAbelton" 2>/dev/null || true
             # Ad-hoc signing
-            codesign --force --deep --sign - "dist/ProfesorAbelton.app"
+            codesign --force --sign - "dist/ProfesorAbelton"
             # Verify signing
-            if codesign -v "dist/ProfesorAbelton.app"; then
-                echo "✅ App bundle successfully code signed"
+            if codesign -v "dist/ProfesorAbelton"; then
+                echo "✅ Executable successfully code signed"
             else
                 echo "⚠️ Code signing completed but verification failed"
             fi
         else
-            echo "❌ App bundle not found"
+            echo "❌ Executable not found"
             exit 1
         fi
 
     - name: Create ZIP for distribution
       run: |
         cd dist
-        ditto -c -k --sequesterRsrc --keepParent "ProfesorAbelton.app" "../release/ProfesorAbelton_macOS_v2.0.0.zip"
+        zip "../release/ProfesorAbelton_macOS_v2.0.0.zip" "ProfesorAbelton"
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
         name: macos-build
         path: |
-          dist/ProfesorAbelton.app
+          dist/ProfesorAbelton
           release/ProfesorAbelton_macOS_v2.0.0.zip
