@@ -52,7 +52,7 @@ jobs:
     - name: Run PyInstaller
       run: |
         # Create .app bundle for macOS
-        pyi-makespec --noconfirm --windowed \
+        pyi-makespec --windowed \
           --name "ProfesorAbelton" \
           --add-data "Config:Config" \
           --add-data "RemoteScript:RemoteScript" \
