@@ -1,0 +1,48 @@
+name: Build Mac App
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Install PyInstaller
+      run: |
+        pip install pyinstaller
+
+    - name: Create build directory
+      run: |
+        mkdir -p build
+        mkdir -p dist
+
+    - name: Build Mac app
+      run: |
+        chmod +x build_mac.sh
+        ./build_mac.sh
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: profesor-abelton-mac-build
+        path: |
+          dist/
+          release/
+        retention-days: 30
