@@ -20,11 +20,13 @@ try:
 except Exception:
     APIKeyManager = None
 
-try:
-    import speech_recognition as sr
-except ImportError:
-    sr = None
-    print("⚠️ Voice recognition not available. Install: pip install SpeechRecognition")
+# Voice control removed for v2.0.0 stability
+# try:
+#     import speech_recognition as sr
+# except ImportError:
+#     sr = None
+#     print("⚠️ Voice recognition not available. Install: pip install SpeechRecognition")
+sr = None
 
 try:
     from pystray import Icon, Menu, MenuItem
@@ -73,7 +75,17 @@ class ProfesorAbeltonGUI:
 
         # Voice recognition
         self.recognizer = sr.Recognizer() if sr else None
+<<<<<<< HEAD
         self.microphone = sr.Microphone() if sr else None
+=======
+        self.microphone = None
+        if sr:
+            try:
+                self.microphone = sr.Microphone()
+            except Exception as e:
+                print(f"[!] Microphone disabled: {e}")
+                self.microphone = None
+>>>>>>> master
         self.is_listening = False
         self.current_language = "en"  # 'en' or 'hr'
         
@@ -1202,9 +1214,19 @@ For more info, see README.md
 
 def main():
     """Main entry point"""
+<<<<<<< HEAD
     root = tk.Tk()
     app = ProfesorAbeltonGUI(root)
     root.mainloop()
+=======
+    try:
+        root = tk.Tk()
+        app = ProfesorAbeltonGUI(root)
+        root.mainloop()
+    except Exception as e:
+        print(f"[X] Error: Could not start GUI - {e}")
+        raise
+>>>>>>> master
 
 
 if __name__ == "__main__":
