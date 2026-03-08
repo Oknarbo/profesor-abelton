@@ -51,6 +51,25 @@ jobs:
 
     - name: Run PyInstaller
       run: |
+        # Create .app bundle for macOS
+        pyi-makespec --noconfirm --windowed \
+          --name "ProfesorAbelton" \
+          --add-data "Config:Config" \
+          --add-data "RemoteScript:RemoteScript" \
+          --add-data "Docs:Docs" \
+          --add-data "FAQ.md:." \
+          --add-data "USER_MANUAL.md:." \
+          --add-data "README.md:." \
+          --add-data "LICENSE.txt:." \
+          --add-data "GUMROAD_README.txt:." \
+          --hidden-import "GUI.profesor_ableton_gui" \
+          --hidden-import "GUI.first_launch_wizard" \
+          --hidden-import "Server.ai_copilot_server" \
+          --hidden-import "Utils.api_key_manager" \
+          --hidden-import "Utils.ableton_detector" \
+          launch_profesor_ableton.py
+
+        # Build with spec file
         pyinstaller --noconfirm --clean ProfesorAbelton.spec
 
     - name: Code sign app bundle
