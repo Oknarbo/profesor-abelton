@@ -69,8 +69,8 @@ jobs:
           --hidden-import "Utils.ableton_detector" \
           launch_profesor_ableton.py
 
-        # Build with spec file but override to create single file
-        pyinstaller --noconfirm --clean --onefile ProfesorAbelton.spec
+        # Build with spec file (now configured for single file)
+        pyinstaller --noconfirm --clean ProfesorAbelton.spec
 
     - name: Code sign executable
       run: |

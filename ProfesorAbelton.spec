@@ -52,7 +52,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    exclude_binaries=False,
+    exclude_binaries=True,  # Create single file executable
     name="ProfesorAbelton",
     debug=False,
     bootloader_ignore_signals=False,
