@@ -1,41 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from pathlib import Path
-
-block_cipher = None
-
-# PyInstaller provides SPECPATH when executing spec files.
-ROOT = Path(globals().get("SPECPATH", ".")).resolve()
-
-datas = [
-    (str(ROOT / "Config"), "Config"),
-    (str(ROOT / "RemoteScript"), "RemoteScript"),
-    (str(ROOT / "Docs"), "Docs"),
-    (str(ROOT / "FAQ.md"), "."),
-    (str(ROOT / "USER_MANUAL.md"), "."),
-    (str(ROOT / "README.md"), "."),
-    (str(ROOT / "LICENSE.txt"), "."),
-    (str(ROOT / "GUMROAD_README.txt"), "."),
-]
-
-hiddenimports = [
-    # Ensure bundled modules are present even if imported dynamically
-    "Server.ai_copilot_server",
-    "GUI.profesor_ableton_gui",
-    "GUI.first_launch_wizard",
-    "Utils.api_key_manager",
-    "Utils.ableton_detector",
-    # Optional extras (if present in environment)
-    "pystray",
-    "PIL",
-]
 
 a = Analysis(
-    ["launch_profesor_ableton.py"],
-    pathex=[str(ROOT)],
+    ['launch_profesor_ableton.py'],
+    pathex=[],
     binaries=[],
-    datas=datas,
-    hiddenimports=hiddenimports,
+    datas=[],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -43,8 +14,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
@@ -52,14 +22,17 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    exclude_binaries=True,  # Create single file executable
-    name="ProfesorAbelton",
+    name='ProfesorAbelton',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,  # Disabled UPX to avoid antivirus false positives
-    console=False,  # windowed app (Gumroad-friendly)
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
     disable_windowed_traceback=False,
-    icon="NONE",
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
 )
-
