@@ -20,8 +20,8 @@ def safe_input(prompt="Press Enter to continue..."):
     try:
         print(prompt)
         return input()
-    except RuntimeError as e:
-        if "lost sys.stdin" in str(e):
+    except (RuntimeError, EOFError) as e:
+        if "lost sys.stdin" in str(e) or isinstance(e, EOFError):
             print(f"{prompt} (waiting 3 seconds...)")
             time.sleep(3)
             return ""
@@ -56,7 +56,7 @@ except Exception:
 def print_header():
     """Print fancy header"""
     print("=" * 60)
-    print("       🎓 PROFESOR ABELTON v2.0.0 🎓")
+    print("       PROFESOR ABELTON v2.0.0")
     print("=" * 60)
     print()
 
@@ -454,8 +454,8 @@ def show_quick_tips():
     print("   • Server: Must be running for AI to work")
     print("   • GUI: Type commands and communicate here")
     print("   • Ableton: Check that ProfesorAbelton is selected in Control Surface")
-    print("   • API Keys: Click ⚙️ in GUI to enter keys")
-    print("   • Voice: Click 🎤 for voice commands")
+    print("   • API Keys: Click Settings in GUI to enter keys")
+    print("   • Voice: Click Voice for voice commands")
     print()
 
 def main():
@@ -538,7 +538,7 @@ def main():
     
     print()
     print("=" * 60)
-    print("  Profesor Abelton closed. See you! 🎓")
+    print("  Profesor Abelton closed. See you!")
     print("=" * 60)
     
     return 0
