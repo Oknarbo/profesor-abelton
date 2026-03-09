@@ -12,6 +12,22 @@ import threading
 import socket
 from pathlib import Path
 
+def safe_input(prompt="Press Enter to continue..."):
+    """
+    Safe input that works in both console and windowed apps.
+    In windowed apps, waits 3 seconds instead of asking for input.
+    """
+    try:
+        print(prompt)
+        return input()
+    except RuntimeError as e:
+        if "lost sys.stdin" in str(e):
+            print(f"{prompt} (waiting 3 seconds...)")
+            time.sleep(3)
+            return ""
+        else:
+            raise
+
 # Import first-run setup
 try:
     from first_run_setup import check_and_install
@@ -465,7 +481,7 @@ def main():
     
     # Check dependencies
     if not check_dependencies():
-        input("Press Enter to exit...")
+        safe_input("Press Enter to exit...")
         return 1
 
     # Install/Update RemoteScript (preferred path)
@@ -479,7 +495,7 @@ def main():
                 print("[!] RemoteScript setup incomplete.")
                 print("    You can continue, but Ableton won't connect.")
                 print()
-                response = input("Continue anyway? (y/n): ")
+                response = safe_input("Continue anyway? (y/n): ")
                 if response.lower() != 'y':
                     return 1
         else:
@@ -487,7 +503,7 @@ def main():
             print("[!] RemoteScript setup incomplete.")
             print("    You can continue, but Ableton won't connect.")
             print()
-            response = input("Continue anyway? (y/n): ")
+            response = safe_input("Continue anyway? (y/n): ")
             if response.lower() != 'y':
                 return 1
     print()
@@ -499,7 +515,7 @@ def main():
     server_process = start_server()
     if not server_process:
         print("[X] Cannot start server!")
-        input("Press Enter to exit...")
+        safe_input("Press Enter to exit...")
         return 1
     
     # Start GUI
@@ -514,7 +530,7 @@ def main():
                     server_process.stop()
                 except Exception:
                     pass
-        input("Press Enter to exit...")
+        safe_input("Press Enter to exit...")
         return 1
     
     # Monitor processes
@@ -536,6 +552,6 @@ if __name__ == "__main__":
         print(f"[X] Unexpected error: {e}")
         import traceback
         traceback.print_exc()
-        input("Press Enter to exit...")
+        safe_input("Press Enter to exit...")
         sys.exit(1)
 
