@@ -6,6 +6,19 @@ Version: 2.0.0
 
 import os
 import sys
+
+# Fix Unicode encoding issues on Windows console
+if sys.platform == 'win32':
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except AttributeError:
+        # Python < 3.7 doesn't have reconfigure
+        pass
+
+import os
+import sys
 import subprocess
 import time
 import threading
@@ -56,7 +69,7 @@ except Exception:
 def print_header():
     """Print fancy header"""
     print("=" * 60)
-    print("       PROFESOR ABELTON v2.0.0")
+    print("       🎓 PROFESOR ABELTON v2.0.0 🎓")
     print("=" * 60)
     print()
 
@@ -454,8 +467,8 @@ def show_quick_tips():
     print("   • Server: Must be running for AI to work")
     print("   • GUI: Type commands and communicate here")
     print("   • Ableton: Check that ProfesorAbelton is selected in Control Surface")
-    print("   • API Keys: Click Settings in GUI to enter keys")
-    print("   • Voice: Click Voice for voice commands")
+    print("   • API Keys: Click ⚙️ in GUI to enter keys")
+    print("   • Voice: Click 🎤 for voice commands")
     print()
 
 def main():
@@ -538,7 +551,7 @@ def main():
     
     print()
     print("=" * 60)
-    print("  Profesor Abelton closed. See you!")
+    print("  Profesor Abelton closed. See you! 🎓")
     print("=" * 60)
     
     return 0
