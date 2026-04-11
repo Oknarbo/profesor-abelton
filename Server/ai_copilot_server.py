@@ -8,7 +8,48 @@ import threading
 import time
 import os
 import sys
+import secrets
 from datetime import datetime
+
+try:
+    from Utils.license_manager import verify_license, is_dev_mode
+    _LICENSE_MANAGER_OK = True
+except Exception:
+    _LICENSE_MANAGER_OK = False
+    def verify_license(key): return {"valid": False, "message": "License manager not available."}
+    def is_dev_mode(): return False
+
+
+class _LicenseCache:
+    """
+    Thread-safe, TTL-based cache for Gumroad license validation results.
+    Prevents calling the Gumroad API on every AI request.
+    TTL: 24 hours per key.
+    """
+    TTL = 86400  # seconds
+
+    def __init__(self):
+        self._cache: dict = {}  # key -> (valid: bool, msg: str, ts: float)
+        self._lock = threading.Lock()
+
+    def check(self, license_key: str):
+        """Returns (valid: bool, message: str). Calls Gumroad if cache is stale."""
+        key = license_key.strip() if license_key else ""
+        if not key:
+            return False, "No license key provided."
+        with self._lock:
+            entry = self._cache.get(key)
+        if entry:
+            valid, msg, ts = entry
+            if time.time() - ts < self.TTL:
+                return valid, msg
+        result = verify_license(key)
+        with self._lock:
+            self._cache[key] = (result["valid"], result["message"], time.time())
+        return result["valid"], result["message"]
+
+
+_license_cache = _LicenseCache()
 
 # Try importing required libraries
 try:
@@ -52,11 +93,15 @@ class AIConfig:
 
         if config_path is None:
             script_dir = os.path.dirname(os.path.abspath(__file__))
+            # ~/.profesor_abelton/ is always writable and shared with the GUI
+            user_cfg = os.path.join(os.path.expanduser("~"), ".profesor_abelton", "copilot_config.json")
             possible_paths = [
+                # Frozen app: user-writable path (read first if exists, always write here)
+                user_cfg if getattr(sys, "frozen", False) else "",
                 # Preferred: project-root Config (robust vs current working directory)
                 os.path.join(script_dir, "..", "Config", "copilot_config.json"),
-                # PyInstaller onedir: config next to executable
-                os.path.join(os.path.dirname(sys.executable), "Config", "copilot_config.json") if getattr(sys, "frozen", False) else "",
+                # PyInstaller: bundled config as seed/defaults
+                os.path.join(getattr(sys, "_MEIPASS", ""), "Config", "copilot_config.json") if getattr(sys, "frozen", False) else "",
                 # Local server folder copy (rare)
                 os.path.join(script_dir, "copilot_config.json"),
                 # Relative fallbacks (if user runs from project root)
@@ -70,7 +115,12 @@ class AIConfig:
                     break
 
             if config_path is None:
-                config_path = possible_paths[0]  # Default to first option
+                # Default: user-writable when frozen, project Config when not
+                if getattr(sys, "frozen", False):
+                    config_path = user_cfg
+                    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+                else:
+                    config_path = possible_paths[1]  # ../Config/copilot_config.json
         
         self.config_path = config_path
         self.config = self.load_config()
@@ -79,27 +129,31 @@ class AIConfig:
         """Load configuration from file"""
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                config = json.load(f)
         except FileNotFoundError:
             print(f"[!] Config file not found: {self.config_path}")
-            return self.default_config()
+            config = self.default_config()
         except Exception as e:
             print(f"[!] Error loading config: {e}")
-            return self.default_config()
+            config = self.default_config()
+        return self._normalize_and_persist(config)
     
     def default_config(self):
         """Return default configuration"""
         return {
             "server": {
-                "host": "localhost",
+                "host": "127.0.0.1",
                 "port": 8766
+            },
+            "security": {
+                "auth_token": ""
             },
             "ai_providers": {
                 "default": "GROQ",
                 "models": {
                     "GPT": "gpt-4o-mini",
                     # Keep in sync with Config/copilot_config.json defaults
-                    "CLAUDE": "claude-opus-4-20250514",
+                    "CLAUDE": "claude-haiku-4-5-20251001",
                     "GROK": "grok-beta",
                     "GROQ": "llama-3.3-70b-versatile",
                     "OLLAMA": "llama3.1"
@@ -120,6 +174,35 @@ class AIConfig:
                 "energy_threshold": 300
             }
         }
+
+    def _normalize_and_persist(self, config):
+        changed = False
+
+        server_cfg = config.setdefault("server", {})
+        host = str(server_cfg.get("host", "127.0.0.1") or "127.0.0.1").strip().lower()
+        if host not in {"localhost", "127.0.0.1", "::1"}:
+            server_cfg["host"] = "127.0.0.1"
+            changed = True
+        elif host != "127.0.0.1":
+            server_cfg["host"] = "127.0.0.1"
+            changed = True
+
+        security_cfg = config.setdefault("security", {})
+        auth_token = str(security_cfg.get("auth_token", "") or "").strip()
+        if not auth_token:
+            security_cfg["auth_token"] = secrets.token_hex(32)
+            changed = True
+
+        if changed:
+            self.save_config(config)
+        return config
+
+    def save_config(self, config):
+        config_dir = os.path.dirname(self.config_path)
+        if config_dir:
+            os.makedirs(config_dir, exist_ok=True)
+        with open(self.config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
     
     def get(self, *keys):
         """Get nested config value"""
@@ -588,80 +671,182 @@ class LLMProvider:
     def call_llm(self, prompt, context=None):
         """Call the configured LLM provider"""
         try:
+            request_profile = self._build_request_profile(prompt, context)
             if self.provider == "GPT":
-                return self._call_openai(prompt, context)
+                return self._call_openai(prompt, context, request_profile)
             elif self.provider == "CLAUDE":
-                return self._call_claude(prompt, context)
+                return self._call_claude(prompt, context, request_profile)
             elif self.provider == "GROK":
-                return self._call_grok(prompt, context)
+                return self._call_grok(prompt, context, request_profile)
             elif self.provider == "GROQ":
-                return self._call_groq(prompt, context)
+                return self._call_groq(prompt, context, request_profile)
             elif self.provider == "OLLAMA":
-                return self._call_ollama(prompt, context)
+                return self._call_ollama(prompt, context, request_profile)
             else:
                 return {"error": f"Unknown provider: {self.provider}"}
         except Exception as e:
             return {"error": str(e)}
     
-    def _build_system_prompt(self, context):
-        """Build system prompt with Ableton context"""
-        system = """You are an AI assistant for Ableton Live. You help users with:
-- Creating tracks, clips, and MIDI patterns
-- Adjusting mix parameters (volume, pan, effects)
-- Teaching music production concepts
-- Troubleshooting Ableton issues
-- Providing creative suggestions
+    def _build_request_profile(self, prompt, context):
+        text = str(prompt or "").strip().lower()
 
-When users ask you to perform actions, respond with JSON commands. Use this format:
-[
-    {
-        "action": "create_midi_track",
-        "parameters": {"position": -1}
-    },
-    {
-        "action": "create_clip",
-        "parameters": {"track_index": "LAST_CREATED", "slot_index": 0, "length": 4}
-    },
-    {
-        "action": "add_notes",
-        "parameters": {"track_index": "LAST_CREATED", "slot_index": 0, "notes": [[36, 0, 1, 100], [36, 2, 1, 100]]}
-    }
-]
+        explain_markers = [
+            "objasni", "explain", "how do i", "how to", "what is", "što je", "why", "zašto",
+            "tutorial", "teach", "learn", "difference", "razlika", "kako dodati", "kako napraviti",
+        ]
+        project_markers = [
+            "analyze", "analiz", "session", "projekt", "project", "arrangement", "set",
+            "all tracks", "sve trake", "mix", "suggest", "predloži", "review", "compare",
+            "group all", "scan", "find all",
+        ]
+        command_markers = [
+            "create", "add", "set", "mute", "solo", "arm", "play", "stop", "record",
+            "delete", "remove", "rename", "move", "duplicate", "group", "ungroup",
+            "transpose", "quantize", "humanize", "export", "load", "toggle",
+            "napravi", "dodaj", "postavi", "pokreni", "zaustavi", "obriši", "promijeni",
+        ]
 
-Available actions:
-- create_audio_track: {"position": -1} (adds track at end)
-- create_midi_track: {"position": -1} (adds track at end)
-- set_tempo: {"bpm": 120}
-- play, stop, record: {}
-- create_clip: {"track_index": "LAST_CREATED", "slot_index": 0, "length": 4}
-- add_notes: {"track_index": "LAST_CREATED", "slot_index": 0, "notes": [[36, 0, 1, 100]]}
-- mute_track: {"track_index": 0, "mute": true}  # Mute or unmute
-- unmute_track: {"track_index": 0, "mute": false}  # Use for unmute
-- play_clip: {"track_index": 4, "slot_index": 0} # Play specific clip
-- stop_clip: {"track_index": 4, "slot_index": 0} # Stop specific clip
-- group_tracks: {"track_indices": [0, 1, 2, 3], "name": "Drums"} # Group multiple tracks into folder
-- ungroup_tracks: {"track_index": 0} # Ungroup a group track
+        has_explain = any(marker in text for marker in explain_markers)
+        has_project = any(marker in text for marker in project_markers)
+        has_command = any(marker in text for marker in command_markers)
 
-Examples:
-- "Unmute track 1": {"action": "mute_track", "parameters": {"track_index": 0, "mute": false}}
-- "Add kick to track 5": Use track_index: 4 (tracks start at 0)
-- "Pokreni traku 5": {"action": "play_clip", "parameters": {"track_index": 4, "slot_index": 0}}
-- "Grupiraj trake 1, 2, 3 u folder 'Drums'": {"action": "group_tracks", "parameters": {"track_indices": [0, 1, 2], "name": "Drums"}}
-- "Grupiraj sve drum trake": Identify drum tracks from current state, then use group_tracks with their indices
+        # Command takes priority — if user asks to DO something, always execute
+        # "set tempo", "create track", "analyze AND create" → command mode
+        if has_command:
+            mode = "command"
+        elif has_explain and not has_project:
+            mode = "explain"
+        elif has_project or len(text) > 180:
+            mode = "project"
+        else:
+            mode = "explain"
 
-IMPORTANT:
-- Use "LAST_CREATED" for track_index when referring to the track you just created
-- Use position: -1 to add tracks at the end
-- Notes format: [pitch, time, duration, velocity] where time is in beats (0, 1, 2, 3...)
+        context_level = "none" if mode == "explain" else ("small" if mode == "command" else "medium")
 
-For learning questions, provide helpful, beginner-friendly explanations."""
-        
+        return {
+            "mode": mode,
+            "context_level": context_level,
+            "context": self._summarize_context(context, context_level),
+            "claude_max_tokens": 450 if mode == "explain" else (500 if mode == "command" else 900),
+            "groq_max_tokens": 450 if mode == "explain" else (600 if mode == "command" else 700),
+        }
+
+    def _build_request_debug(self, request_profile, model):
+        context_data = (request_profile or {}).get("context", {})
+        track_count = len(context_data.get("tracks", [])) if isinstance(context_data, dict) else 0
+        return {
+            "mode": (request_profile or {}).get("mode", "unknown"),
+            "context_level": (request_profile or {}).get("context_level", "unknown"),
+            "track_count": track_count,
+            "model": model,
+        }
+
+    def _build_system_prompt(self, context, mode="command", provider=None):
+        """Build compact system prompt with adaptive context."""
+        if mode == "explain":
+            system = (
+                "You are a concise Ableton Live teacher. "
+                "Answer clearly, beginner-friendly, and keep responses practical and short. "
+                "Do not output JSON unless the user explicitly asks for automation."
+            )
+        elif mode == "project":
+            system = (
+                "You are Profesor Abelton, a friendly and honest music mentor.\n"
+                "You have received the full Ableton project state below.\n"
+                "Analyze it specifically and give concrete feedback:\n"
+                "- What sounds good and why\n"
+                "- What could be improved (mixing, arrangement, structure)\n"
+                "- Any specific issues you notice with tracks, levels, or devices\n"
+                "Be specific, reference actual track names and values from the project.\n"
+                "Never give generic answers. Talk like a knowledgeable friend, not a corporate AI.\n"
+                "Never say you cannot analyze — you have full context.\n"
+                "IMPORTANT: Do NOT output any JSON. Do NOT create tracks or execute commands. "
+                "Write only plain conversational feedback. If the session appears empty, say so honestly "
+                "and explain that Ableton must be open and connected via the ProfesorAbelton Remote Script."
+            )
+        elif provider == "CLAUDE":
+            system = (
+                "You are an Ableton Live assistant. "
+                "If the user wants an action, use the provided tools. "
+                "If they want information, answer briefly in plain language."
+            )
+        else:
+            system = (
+                "You are Profesor Abelton — an Ableton Live AI that EXECUTES commands directly in Ableton.\n"
+                "CRITICAL RULES:\n"
+                "1. When the user asks you to DO anything (create, set, add, delete, play, stop, rename, etc.) "
+                "→ ALWAYS output the JSON command block. NEVER explain how the user should do it manually.\n"
+                "2. NEVER say 'I can't execute', 'I'm not here to execute', or 'go to menu X and click Y'. "
+                "You ARE the executor. Just do it.\n"
+                "3. Keep text SHORT (1-2 sentences). The JSON does the work, not the explanation.\n"
+                "4. Use the Current Ableton State to know exact track indices, names, and devices. "
+                "Never guess track indices — read them from the state.\n"
+                "5. For drum patterns: use create_drum_pattern with proper kick/snare/hihat pitches (36/38/42). "
+                "For melodies: use add_notes with multiple notes. Always add real content, not just 1-2 notes.\n"
+                "6. NOTE: create_clip creates in Session View. "
+                "If user wants Arrangement View, create in Session View and tell them to drag it to Arrangement.\n"
+                "JSON format: ```[{\"action\":\"name\",\"parameters\":{...}}]```\n"
+                "Allowed actions: create_audio_track, create_midi_track, set_tempo, play, stop, record, add_device, "
+                "set_track_volume, set_track_pan, mute_track, solo_track, arm_track, create_clip, add_notes, delete_track, "
+                "play_clip, stop_clip, group_tracks, ungroup_tracks, add_return_track, rename_track, set_track_color, "
+                "duplicate_track, move_track, add_single_note, delete_notes, transpose_notes, humanize_notes, quantize_notes, "
+                "create_drum_pattern, remove_device, toggle_device, set_device_parameter, set_send_level, load_device_preset, "
+                "record_audio, export_audio, undo_action, save_snapshot, set_loop_markers, consolidate_clip."
+            )
+
         if context:
             system += f"\n\nCurrent Ableton State:\n{json.dumps(context, indent=2)}"
-        
+
         return system
+
+    def _summarize_context(self, context, level="medium"):
+        if not isinstance(context, dict):
+            return {}
+        if level == "none":
+            return {}
+
+        summary = {
+            "tempo": context.get("tempo"),
+            "is_playing": context.get("is_playing"),
+            "loop_enabled": context.get("loop_enabled"),
+            "record_mode": context.get("record_mode"),
+            "metronome": context.get("metronome"),
+            "track_count": len(context.get("tracks", [])) if isinstance(context.get("tracks"), list) else 0,
+            "tracks": [],
+        }
+
+        tracks = context.get("tracks", [])
+        if isinstance(tracks, list):
+            track_limit = 8 if level == "small" else 16
+            device_limit = 0 if level == "small" else 4
+            clip_limit = 0 if level == "small" else 4
+            for track in tracks[:track_limit]:
+                if not isinstance(track, dict):
+                    continue
+                track_summary = {
+                    "index": track.get("index"),
+                    "name": track.get("name"),
+                    "type": track.get("type"),
+                    "muted": track.get("muted"),
+                    "solo": track.get("solo"),
+                    "armed": track.get("armed"),
+                }
+                if level != "small":
+                    track_summary["device_names"] = [
+                        device.get("name")
+                        for device in track.get("devices", [])[:device_limit]
+                        if isinstance(device, dict)
+                    ]
+                    track_summary["clip_names"] = [
+                        clip.get("name")
+                        for clip in track.get("clips", [])[:clip_limit]
+                        if isinstance(clip, dict)
+                    ]
+                summary["tracks"].append(track_summary)
+
+        return summary
     
-    def _call_openai(self, prompt, context):
+    def _call_openai(self, prompt, context, request_profile=None):
         """Call OpenAI GPT API"""
         api_key = self.api_keys.get("GPT")
         if not api_key:
@@ -684,23 +869,30 @@ For learning questions, provide helpful, beginner-friendly explanations."""
             "temperature": 0.7
         }
         
-        response = requests.post(url, headers=headers, json=data, timeout=30)
+        response = requests.post(url, headers=headers, json=data, timeout=60)
         
         if response.status_code == 200:
             result = response.json()
             content = result["choices"][0]["message"]["content"]
-            return {"response": content, "provider": "GPT"}
+            return {
+                "response": content,
+                "provider": "GPT",
+                "request_debug": self._build_request_debug(request_profile, model),
+            }
         else:
             return {"error": f"OpenAI API error: {response.status_code}"}
     
-    def _call_claude(self, prompt, context):
+    def _call_claude(self, prompt, context, request_profile=None):
         """Call Anthropic Claude API with MCP tool support"""
         api_key = self.api_keys.get("CLAUDE")
         if not api_key:
             return {"error": "Claude API key not found. Set CLAUDE_API_KEY environment variable."}
 
         url = self.config.get("ai_providers", "api_urls", "CLAUDE")
-        model = self.config.get("ai_providers", "models", "CLAUDE")
+        mode = (request_profile or {}).get("mode", "command")
+        context_for_request = (request_profile or {}).get("context", context)
+        model_key = "CLAUDE_HAIKU" if mode in {"explain", "command"} and self.config.get("ai_providers", "models", "CLAUDE_HAIKU") else "CLAUDE"
+        model = self.config.get("ai_providers", "models", model_key)
 
         headers = {
             "x-api-key": api_key,
@@ -708,7 +900,7 @@ For learning questions, provide helpful, beginner-friendly explanations."""
             "Content-Type": "application/json"
         }
 
-        system_prompt = self._build_system_prompt(context)
+        system_prompt = self._build_system_prompt(context_for_request, mode=mode, provider="CLAUDE")
 
         # Check if MCP mode is enabled (can be set via config or environment)
         # Priority: Environment variable > Config file > Default (true)
@@ -722,7 +914,7 @@ For learning questions, provide helpful, beginner-friendly explanations."""
 
         data = {
             "model": model,
-            "max_tokens": 2048,
+            "max_tokens": (request_profile or {}).get("claude_max_tokens", 700),
             "system": system_prompt,
             "messages": [
                 {"role": "user", "content": prompt}
@@ -730,13 +922,13 @@ For learning questions, provide helpful, beginner-friendly explanations."""
         }
 
         # Add MCP tools if enabled
-        if mcp_enabled:
+        if mcp_enabled and mode != "explain":
             data["tools"] = self.mcp_tools
             data["tool_choice"] = {"type": "auto"}  # Let Claude decide when to use tools
             print(f"🔧 Added {len(self.mcp_tools)} MCP tools to Claude request")
 
         try:
-            response = requests.post(url, headers=headers, json=data, timeout=30)
+            response = requests.post(url, headers=headers, json=data, timeout=60)
         except requests.exceptions.RequestException as e:
             return {"error": f"Claude API request failed: {str(e)}"}
 
@@ -760,7 +952,8 @@ For learning questions, provide helpful, beginner-friendly explanations."""
             response_data = {
                 "response": text_content,
                 "provider": "Claude",
-                "mcp_enabled": mcp_enabled
+                "mcp_enabled": mcp_enabled,
+                "request_debug": self._build_request_debug(request_profile, model),
             }
 
             # Convert MCP tool calls to commands for Ableton
@@ -802,7 +995,7 @@ For learning questions, provide helpful, beginner-friendly explanations."""
             
             return {"error": error_msg}
     
-    def _call_grok(self, prompt, context):
+    def _call_grok(self, prompt, context, request_profile=None):
         """Call xAI Grok API"""
         api_key = self.api_keys.get("GROK")
         if not api_key:
@@ -825,16 +1018,20 @@ For learning questions, provide helpful, beginner-friendly explanations."""
             "temperature": 0.7
         }
         
-        response = requests.post(url, headers=headers, json=data, timeout=30)
+        response = requests.post(url, headers=headers, json=data, timeout=60)
         
         if response.status_code == 200:
             result = response.json()
             content = result["choices"][0]["message"]["content"]
-            return {"response": content, "provider": "Grok"}
+            return {
+                "response": content,
+                "provider": "Grok",
+                "request_debug": self._build_request_debug(request_profile, model),
+            }
         else:
             return {"error": f"Grok API error: {response.status_code}"}
     
-    def _call_groq(self, prompt, context):
+    def _call_groq(self, prompt, context, request_profile=None):
         """Call Groq API"""
         api_key = self.api_keys.get("GROQ")
         if not api_key:
@@ -842,6 +1039,8 @@ For learning questions, provide helpful, beginner-friendly explanations."""
         
         url = self.config.get("ai_providers", "api_urls", "GROQ")
         model = self.config.get("ai_providers", "models", "GROQ")
+        mode = (request_profile or {}).get("mode", "command")
+        context_for_request = (request_profile or {}).get("context", context)
         
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -851,27 +1050,34 @@ For learning questions, provide helpful, beginner-friendly explanations."""
         data = {
             "model": model,
             "messages": [
-                {"role": "system", "content": self._build_system_prompt(context)},
+                {"role": "system", "content": self._build_system_prompt(context_for_request, mode=mode, provider="GROQ")},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.7
+            "temperature": 0.4 if mode == "explain" else 0.2,
+            "max_tokens": (request_profile or {}).get("groq_max_tokens", 500)
         }
         
-        response = requests.post(url, headers=headers, json=data, timeout=30)
+        response = requests.post(url, headers=headers, json=data, timeout=60)
         
         if response.status_code == 200:
             result = response.json()
             content = result["choices"][0]["message"]["content"]
-            return {"response": content, "provider": "Groq"}
+            return {
+                "response": content,
+                "provider": "Groq",
+                "request_debug": self._build_request_debug(request_profile, model),
+            }
         else:
             return {"error": f"Groq API error: {response.status_code}"}
     
-    def _call_ollama(self, prompt, context):
+    def _call_ollama(self, prompt, context, request_profile=None):
         """Call local Ollama API"""
         url = self.config.get("ai_providers", "api_urls", "OLLAMA")
         model = self.config.get("ai_providers", "models", "OLLAMA")
+        mode = (request_profile or {}).get("mode", "command")
+        context_for_request = (request_profile or {}).get("context", context)
         
-        full_prompt = f"{self._build_system_prompt(context)}\n\nUser: {prompt}\nAssistant:"
+        full_prompt = f"{self._build_system_prompt(context_for_request, mode=mode, provider='OLLAMA')}\n\nUser: {prompt}\nAssistant:"
         
         data = {
             "model": model,
@@ -885,7 +1091,11 @@ For learning questions, provide helpful, beginner-friendly explanations."""
             if response.status_code == 200:
                 result = response.json()
                 content = result.get("response", "No response from Ollama")
-                return {"response": content, "provider": "Ollama"}
+                return {
+                    "response": content,
+                    "provider": "Ollama",
+                    "request_debug": self._build_request_debug(request_profile, model),
+                }
             else:
                 return {"error": f"Ollama API error: {response.status_code}"}
         except requests.exceptions.ConnectionError:
@@ -1028,13 +1238,60 @@ class AICopilotServer:
         self.current_state = {}
         self.chat_history = []
         self.last_ableton_update = 0  # Timestamp of last Ableton state update
+        self.ableton_client_connected = False
         self.command_queue = []  # Queue of commands to send to Ableton
         self.last_created_track_index = -1  # Track index of last created track
         self.is_running = False
+        self.allowed_providers = {"GPT", "CLAUDE", "GROK", "GROQ", "OLLAMA"}
+        self.allowed_actions = {
+            "create_audio_track",
+            "create_midi_track",
+            "set_tempo",
+            "play",
+            "stop",
+            "record",
+            "add_device",
+            "set_track_volume",
+            "set_track_pan",
+            "mute_track",
+            "solo_track",
+            "arm_track",
+            "create_clip",
+            "add_notes",
+            "delete_track",
+            "play_clip",
+            "stop_clip",
+            "group_tracks",
+            "ungroup_tracks",
+            "add_return_track",
+            "rename_track",
+            "set_track_color",
+            "duplicate_track",
+            "move_track",
+            "add_single_note",
+            "delete_notes",
+            "transpose_notes",
+            "humanize_notes",
+            "quantize_notes",
+            "create_drum_pattern",
+            "remove_device",
+            "toggle_device",
+            "set_device_parameter",
+            "set_send_level",
+            "load_device_preset",
+            "record_audio",
+            "export_audio",
+            "undo_action",
+            "save_snapshot",
+            "set_loop_markers",
+            "consolidate_clip",
+        }
+        self.max_commands_per_request = 12
 
         # Server configuration
-        self.host = self.config.get("server", "host")
+        self.host = self._normalize_loopback_host(self.config.get("server", "host"))
         self.port = self.config.get("server", "port")
+        self.auth_token = str(self.config.get("security", "auth_token") or "")
         self.server_socket = None
 
         # OSC configuration
@@ -1051,6 +1308,76 @@ class AICopilotServer:
         # Connected clients
         self.gui_clients = []  # List of connected GUI clients
         self.clients_lock = threading.Lock()  # Thread-safe access to clients list
+
+    def _normalize_loopback_host(self, host):
+        host = str(host or "localhost").strip().lower()
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return "127.0.0.1"
+        print(f"⚠️ Non-loopback host '{host}' is not allowed. Falling back to 127.0.0.1.")
+        return "127.0.0.1"
+
+    def _is_authorized_gui_message(self, message):
+        token = str(message.get("auth_token", "") or "")
+        return bool(token) and bool(self.auth_token) and secrets.compare_digest(token, self.auth_token)
+
+    def _is_safe_json_value(self, value, depth=0):
+        if depth > 5:
+            return False
+        if value is None or isinstance(value, (bool, int, float)):
+            return True
+        if isinstance(value, str):
+            return len(value) <= 2048
+        if isinstance(value, list):
+            return len(value) <= 512 and all(self._is_safe_json_value(item, depth + 1) for item in value)
+        if isinstance(value, dict):
+            if len(value) > 128:
+                return False
+            return all(
+                isinstance(key, str)
+                and len(key) <= 128
+                and self._is_safe_json_value(item, depth + 1)
+                for key, item in value.items()
+            )
+        return False
+
+    def _sanitize_command(self, command):
+        if not isinstance(command, dict):
+            return None
+
+        action = command.get("action")
+        if not isinstance(action, str):
+            return None
+
+        action = action.strip()
+        if action not in self.allowed_actions:
+            print(f"⛔ Rejected unsupported action: {action}")
+            return None
+
+        parameters = command.get("parameters", {})
+        if parameters is None:
+            parameters = {}
+        if not isinstance(parameters, dict):
+            print(f"⛔ Rejected action with invalid parameters: {action}")
+            return None
+        if not self._is_safe_json_value(parameters):
+            print(f"⛔ Rejected unsafe parameter payload for action: {action}")
+            return None
+
+        sanitized = {"action": action, "parameters": parameters}
+
+        if action == "export_audio":
+            file_path = parameters.get("file_path")
+            if file_path:
+                if (
+                    not isinstance(file_path, str)
+                    or len(file_path) > 260
+                    or ".." in file_path
+                    or any(ch in file_path for ch in ["\n", "\r", "\x00"])
+                ):
+                    print("⛔ Rejected unsafe export_audio path")
+                    return None
+
+        return sanitized
         
     def start(self):
         """Start the Profesor Abelton server"""
@@ -1192,8 +1519,14 @@ class AICopilotServer:
                             msg_type = message.get('type')
                             
                             if msg_type == 'ping':
+                                if client_type == 'gui' and not self._is_authorized_gui_message(message):
+                                    response = {"status": "error", "error": "Unauthorized GUI client"}
+                                    client.sendall(json.dumps(response).encode('utf-8') + b'\n')
+                                    break
                                 # Handle ping for connection monitoring (silent)
-                                ableton_connected = (time.time() - self.last_ableton_update) < 10
+                                ableton_connected = self.ableton_client_connected or (
+                                    (time.time() - self.last_ableton_update) < 10
+                                )
                                 response = {
                                     "status": "ok",
                                     "ableton_connected": ableton_connected,
@@ -1201,8 +1534,17 @@ class AICopilotServer:
                                 }
                                 
                             elif msg_type == 'connect':
-                                client_type = message.get('client')
+                                requested_client_type = str(message.get('client') or '').lower()
+                                if requested_client_type == 'gui' and not self._is_authorized_gui_message(message):
+                                    print("⛔ Rejected unauthorized GUI connection")
+                                    response = {"status": "error", "error": "Unauthorized GUI client"}
+                                    client.sendall(json.dumps(response).encode('utf-8') + b'\n')
+                                    break
+
+                                client_type = requested_client_type
                                 print(f"✅ {client_type.upper()} connected")
+                                if client_type == 'ableton':
+                                    self.ableton_client_connected = True
                                 
                                 # Don't add GUI to broadcast list for command connections
                                 # Command connections are short-lived and don't need broadcasts
@@ -1210,14 +1552,19 @@ class AICopilotServer:
                                 response = {"status": "ok", "message": "Connected"}
                                 
                             elif msg_type == 'state_update' and client_type == 'ableton':
+                                self.ableton_client_connected = True
                                 self.handle_state_update(message)
                                 response = {"status": "ok", "message": "State updated"}
                                 
                             elif msg_type == 'get_commands' and client_type == 'ableton':
+                                self.ableton_client_connected = True
                                 response = self.get_pending_commands()
                                 
                             elif msg_type == 'command' and client_type == 'gui':
-                                response = self.handle_command(message)
+                                if not self._is_authorized_gui_message(message):
+                                    response = {"status": "error", "error": "Unauthorized GUI client"}
+                                else:
+                                    response = self.handle_command(message)
                                 
                             else:
                                 response = {"error": f"Unknown message type: {msg_type} for client {client_type}"}
@@ -1248,6 +1595,8 @@ class AICopilotServer:
             if client_type == 'gui':
                 with self.clients_lock:
                     self.gui_clients = [c for c in self.gui_clients if c['socket'] != client]
+            elif client_type == 'ableton':
+                self.ableton_client_connected = False
             
             client.close()
             if client_type:
@@ -1289,10 +1638,21 @@ class AICopilotServer:
     def handle_command(self, message):
         """Handle AI command request"""
         prompt = message.get('prompt', '')
-        
+
         if not prompt:
             return {"error": "No prompt provided"}
-        
+
+        # License validation (cached, TTL 24h — no Gumroad call on every request)
+        if not is_dev_mode():
+            license_key = str(message.get('gumroad_license_key') or "")
+            valid, lic_msg = _license_cache.check(license_key)
+            if not valid:
+                print(f"⛔ License rejected: {lic_msg}")
+                return {
+                    "error": f"License not valid: {lic_msg}",
+                    "license_error": True,
+                }
+
         print(f"💭 User: {prompt}")
         
         # Update provider and API key from message if provided
@@ -1304,7 +1664,10 @@ class AICopilotServer:
         original_api_key = None
         
         if provider:
-            self.llm.provider = provider.upper()
+            provider = str(provider).upper()
+            if provider not in self.allowed_providers:
+                return {"error": f"Unsupported provider: {provider}"}
+            self.llm.provider = provider
             print(f"🔄 Using provider: {self.llm.provider}")
         
         if api_key and provider:
@@ -1352,7 +1715,11 @@ class AICopilotServer:
         processed_commands = []
         track_created = False
 
-        for cmd in commands:
+        for cmd in commands[:self.max_commands_per_request]:
+            cmd = self._sanitize_command(cmd)
+            if not cmd:
+                continue
+
             # Track if we created a track in this batch
             if cmd.get('action') in ['create_midi_track', 'create_audio_track']:
                 track_created = True
@@ -1367,6 +1734,9 @@ class AICopilotServer:
                 print(f"🔧 Fixed track reference -> track_index: {current_tracks} for {cmd.get('action')}")
 
             processed_commands.append(cmd)
+
+        if len(commands) > self.max_commands_per_request:
+            print(f"⚠️ Command list truncated to {self.max_commands_per_request} entries")
 
         # Send commands to Ableton (try OSC first, then socket)
         if processed_commands:
