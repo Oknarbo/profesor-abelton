@@ -78,12 +78,13 @@ rm -rf build dist
   --add-data "USER_MANUAL.md:." \
   --add-data "README.md:." \
   --add-data "LICENSE.txt:." \
-  --add-data "GUMROAD_README.txt:." \
+  --add-data "README FIRST MAC.txt:." \
   --hidden-import "GUI.profesor_ableton_gui" \
   --hidden-import "GUI.first_launch_wizard" \
   --hidden-import "Server.ai_copilot_server" \
   --hidden-import "Utils.api_key_manager" \
   --hidden-import "Utils.ableton_detector" \
+  --hidden-import "Utils.license_manager" \
   launch_profesor_ableton.py
 
 APP_PATH="dist/$APP_NAME.app"
@@ -92,6 +93,33 @@ if [[ ! -d "$APP_PATH" ]]; then
   echo "[DEBUG] Sadržaj dist foldera:"
   ls -la dist/
   exit 1
+fi
+
+# PyInstaller ponekad preimenjuje __init__.py u _init_.py unutar bundlanih data foldera
+# jer ga tretira specijalno kao Python package marker.
+# PyInstaller 6+ (Python 3.13+) stavlja data fajlove u Contents/MacOS/_internal/.
+# Koristimo process substitution umjesto pipe-a — izbjegavamo subshell + set -e probleme.
+echo "[i] Provjera i ispravak __init__.py u bundlanom RemoteScript folderu..."
+_found_bad=0
+while IFS= read -r -d '' f; do
+  target="$(dirname "$f")/__init__.py"
+  mv "$f" "$target"
+  echo "    Ispravljen: $f → $target"
+  _found_bad=1
+done < <(find "$APP_PATH" -name "_init_.py" -path "*/RemoteScript/*" -print0 2>/dev/null)
+
+if [[ "$_found_bad" -eq 0 ]]; then
+  echo "    [i] Nema _init_.py za preimenovati (PyInstaller već ispravno bundlao)."
+fi
+
+# Provjera da __init__.py postoji — bez pipe-a, -quit vraća prvi pogodak
+_found_init="$(find "$APP_PATH" -name "__init__.py" -path "*/RemoteScript/*" -print -quit 2>/dev/null)"
+if [[ -n "$_found_init" ]]; then
+  echo "    [OK] RemoteScript/__init__.py je prisutan u bundlu: $_found_init"
+else
+  echo "    [WARN] RemoteScript/__init__.py nije pronađen — sadržaj RemoteScript foldera:"
+  find "$APP_PATH" -path "*/RemoteScript/*" 2>/dev/null | head -20 || true
+  echo "    Provjeri PyInstaller verziju i putanju _internal/ ručno!"
 fi
 
 mkdir -p release
