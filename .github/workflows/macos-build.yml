@@ -3,8 +3,6 @@ name: macOS Build
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -15,106 +13,25 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v5
       with:
         python-version: '3.13'
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-
-    - name: Install PyInstaller
-      run: |
-        pip install pyinstaller
-
-    - name: Create build directory
-      run: |
-        mkdir -p build dist release
 
     - name: Verify project structure
       run: |
         echo "=== Project structure ==="
         ls -la
-        echo "=== Checking required directories ==="
-        ls -la Config/ || echo "Config directory missing"
-        ls -la RemoteScript/ || echo "RemoteScript directory missing"
-        ls -la Docs/ || echo "Docs directory missing"
-        echo "=== Checking required files ==="
-        ls -la launch_profesor_ableton.py || echo "Main script missing"
-        ls -la requirements.txt || echo "Requirements file missing"
-        ls -la *.md || echo "Documentation files"
-        echo "=== Checking Python version ==="
         python --version
-        pip --version
 
-    - name: Run PyInstaller
+    - name: Run build_mac.sh
       run: |
-        # Create .app bundle for macOS
-        pyi-makespec --windowed \
-          --name "ProfesorAbelton" \
-          --add-data "Config:Config" \
-          --add-data "RemoteScript:RemoteScript" \
-          --add-data "Docs:Docs" \
-          --add-data "FAQ.md:." \
-          --add-data "USER_MANUAL.md:." \
-          --add-data "README.md:." \
-          --add-data "LICENSE.txt:." \
-          --add-data "GUMROAD_README.txt:." \
-          --hidden-import "GUI.profesor_ableton_gui" \
-          --hidden-import "GUI.first_launch_wizard" \
-          --hidden-import "Server.ai_copilot_server" \
-          --hidden-import "Utils.api_key_manager" \
-          --hidden-import "Utils.ableton_detector" \
-          launch_profesor_ableton.py
+        chmod +x build_mac.sh
+        VERSION=2.0.1 bash build_mac.sh
 
-        # Build single file executable directly
-        pyinstaller --onefile --windowed --name ProfesorAbelton \
-          --add-data "Config:Config" \
-          --add-data "RemoteScript:RemoteScript" \
-          --add-data "Docs:Docs" \
-          --add-data "FAQ.md:." \
-          --add-data "USER_MANUAL.md:." \
-          --add-data "README.md:." \
-          --add-data "LICENSE.txt:." \
-          --add-data "GUMROAD_README.txt:." \
-          --hidden-import "GUI.profesor_ableton_gui" \
-          --hidden-import "GUI.first_launch_wizard" \
-          --hidden-import "Server.ai_copilot_server" \
-          --hidden-import "Utils.api_key_manager" \
-          --hidden-import "Utils.ableton_detector" \
-          launch_profesor_ableton.py
-
-    - name: Code sign executable
-      run: |
-        # Ad-hoc code signing to bypass Gatekeeper
-        if [ -f "dist/ProfesorAbelton" ]; then
-            echo "🔐 Code signing executable..."
-            # Remove existing signature first
-            codesign --remove-signature "dist/ProfesorAbelton" 2>/dev/null || true
-            # Ad-hoc signing
-            codesign --force --sign - "dist/ProfesorAbelton"
-            # Verify signing
-            if codesign -v "dist/ProfesorAbelton"; then
-                echo "✅ Executable successfully code signed"
-            else
-                echo "⚠️ Code signing completed but verification failed"
-            fi
-        else
-            echo "❌ Executable not found"
-            exit 1
-        fi
-
-    - name: Create ZIP for distribution
-      run: |
-        cd dist
-        zip "../release/ProfesorAbelton_macOS_v2.0.0.zip" "ProfesorAbelton"
-
-    - name: Upload build artifacts
+    - name: Upload macOS app
       uses: actions/upload-artifact@v4
       with:
-        name: macos-build
-        path: |
-          dist/ProfesorAbelton
-          release/ProfesorAbelton_macOS_v2.0.0.zip
+        name: ProfesorAbelton-macOS-v2.0.1
+        path: release/ProfesorAbelton_macOS_v2.0.1.zip
+        retention-days: 30
